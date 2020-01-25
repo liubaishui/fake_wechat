@@ -3,26 +3,18 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:fake_path_provider/fake_path_provider.dart';
-import 'package:fake_wechat/fake_wechat.dart';
-import 'package:path/path.dart' as path;
 import 'package:image/image.dart' as image;
+import 'package:okhttp_kit/okhttp_kit.dart';
+import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart' as path_provider;
+import 'package:wechat_kit/wechat_kit.dart';
 
-void main() {
-  runZoned(() {
-    runApp(MyApp());
-  }, onError: (Object error, StackTrace stack) {
-    print(error);
-    print(stack);
-  });
+void main() => runApp(MyApp());
 
-  if (Platform.isAndroid) {
-    SystemUiOverlayStyle systemUiOverlayStyle =
-        const SystemUiOverlayStyle(statusBarColor: Colors.transparent);
-    SystemChrome.setSystemUIOverlayStyle(systemUiOverlayStyle);
-  }
-}
+const String WECHAT_APPID = 'wx854345270316ce6e';
+const String WECHAT_UNIVERSAL_LINK = null; // iOS 请配置
+const String WECHAT_APPSECRET = 'ce4c6c4f007cf10baad3f600da16aa8e';
+const String WECHAT_MINIAPPID = 'gh_wxd930ea5d5a258f4f';
 
 class MyApp extends StatelessWidget {
   @override
@@ -41,14 +33,16 @@ class Home extends StatefulWidget {
 }
 
 class _HomeState extends State<Home> {
-  static const String WECHAT_APPID = 'wx854345270316ce6e';
-  static const String WECHAT_APPSECRET = '';
-
-  Wechat _wechat = Wechat()..registerApp(appId: WECHAT_APPID);
+  Wechat _wechat = Wechat()
+    ..registerApp(
+      appId: WECHAT_APPID,
+      universalLink: WECHAT_UNIVERSAL_LINK,
+    );
 
   StreamSubscription<WechatAuthResp> _auth;
   StreamSubscription<WechatSdkResp> _share;
   StreamSubscription<WechatPayResp> _pay;
+  StreamSubscription<WechatLaunchMiniProgramResp> _miniProgram;
 
   WechatAuthResp _authResp;
 
@@ -58,6 +52,7 @@ class _HomeState extends State<Home> {
     _auth = _wechat.authResp().listen(_listenAuth);
     _share = _wechat.shareMsgResp().listen(_listenShareMsg);
     _pay = _wechat.payResp().listen(_listenPay);
+    _miniProgram = _wechat.launchMiniProgramResp().listen(_listenMiniProgram);
   }
 
   void _listenAuth(WechatAuthResp resp) {
@@ -76,6 +71,11 @@ class _HomeState extends State<Home> {
     _showTips('支付', content);
   }
 
+  void _listenMiniProgram(WechatLaunchMiniProgramResp resp) {
+    String content = 'mini program: ${resp.errorCode} ${resp.errorMsg}';
+    _showTips('拉起小程序', content);
+  }
+
   @override
   void dispose() {
     if (_auth != null) {
@@ -87,6 +87,9 @@ class _HomeState extends State<Home> {
     if (_pay != null) {
       _pay.cancel();
     }
+    if (_miniProgram != null) {
+      _miniProgram.cancel();
+    }
     super.dispose();
   }
 
@@ -94,7 +97,7 @@ class _HomeState extends State<Home> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Fake Wechat Demo'),
+        title: const Text('WechatKit Demo'),
       ),
       body: ListView(
         children: <Widget>[
@@ -102,7 +105,7 @@ class _HomeState extends State<Home> {
             title: const Text('环境检查'),
             onTap: () async {
               String content =
-                  'wechat: ${await _wechat.isWechatInstalled()} - ${await _wechat.isWechatSupportApi()}';
+                  'wechat: ${await _wechat.isInstalled()} - ${await _wechat.isSupportApi()}';
               _showTips('环境检查', content);
             },
           ),
@@ -118,13 +121,12 @@ class _HomeState extends State<Home> {
           ListTile(
             title: const Text('扫码登录'),
             onTap: () {
-              Navigator.of(context)
-                  .push(MaterialPageRoute<dynamic>(
-                    builder: (BuildContext context) => Qrauth(
-                      wechat: _wechat,
-                    ),
-                  ))
-                  .then((dynamic result) {});
+              Navigator.of(context).push(MaterialPageRoute<dynamic>(
+                builder: (BuildContext context) => Qrauth(
+                  wechat: _wechat,
+                ),
+              ));
+              ;
             },
           ),
           ListTile(
@@ -170,49 +172,69 @@ class _HomeState extends State<Home> {
           ListTile(
             title: const Text('图片分享'),
             onTap: () async {
-              AssetImage timg = const AssetImage('images/icon/timg.jpeg');
-              AssetBundleImageKey key =
-                  await timg.obtainKey(createLocalImageConfiguration(context));
-              ByteData timgData = await key.bundle.load(key.name);
-              Directory saveDir = await PathProvider.getDocumentsDirectory();
-              File saveFile = File('${saveDir.path}${path.separator}timg.jpeg');
-              if (!saveFile.existsSync()) {
-                saveFile.createSync(recursive: true);
-                saveFile.writeAsBytesSync(timgData.buffer.asUint8List(),
-                    flush: true);
+              OkHttpClient client = OkHttpClientBuilder().build();
+              Response resp = await client
+                  .newCall(RequestBuilder()
+                      .get()
+                      .url(HttpUrl.parse(
+                          'https://www.baidu.com/img/bd_logo1.png?where=super'))
+                      .build())
+                  .enqueue();
+              if (resp.isSuccessful()) {
+                Directory saveDir = Platform.isAndroid
+                    ? await path_provider.getExternalStorageDirectory()
+                    : await path_provider.getApplicationDocumentsDirectory();
+                File saveFile = File(path.join(saveDir.path, 'timg.png'));
+                if (!saveFile.existsSync()) {
+                  saveFile.createSync(recursive: true);
+                  saveFile.writeAsBytesSync(
+                    await resp.body().bytes(),
+                    flush: true,
+                  );
+                }
+                await _wechat.shareImage(
+                  scene: WechatScene.SESSION,
+                  imageUri: Uri.file(saveFile.path),
+                );
               }
-              await _wechat.shareImage(
-                scene: WechatScene.SESSION,
-                imageUri: Uri.file(saveFile.path),
-              );
             },
           ),
           ListTile(
             title: const Text('Emoji分享'),
             onTap: () async {
-              AssetImage timg = const AssetImage('images/icon/timg.gif');
-              AssetBundleImageKey key =
-                  await timg.obtainKey(createLocalImageConfiguration(context));
-              ByteData timgData = await key.bundle.load(key.name);
-              Directory saveDir = await PathProvider.getDocumentsDirectory();
-              File saveFile = File('${saveDir.path}${path.separator}timg.gif');
-              if (!saveFile.existsSync()) {
-                saveFile.createSync(recursive: true);
-                saveFile.writeAsBytesSync(timgData.buffer.asUint8List(),
-                    flush: true);
+              OkHttpClient client = OkHttpClientBuilder().build();
+              Response resp = await client
+                  .newCall(RequestBuilder()
+                      .get()
+                      .url(HttpUrl.parse(
+                          'https://n.sinaimg.cn/tech/transform/695/w467h228/20191119/bf27-iipztfe9404360.gif'))
+                      .build())
+                  .enqueue();
+              if (resp.isSuccessful()) {
+                Directory saveDir = Platform.isAndroid
+                    ? await path_provider.getExternalStorageDirectory()
+                    : await path_provider.getApplicationDocumentsDirectory();
+                File saveFile = File(path.join(saveDir.path, 'timg.gif'));
+                if (!saveFile.existsSync()) {
+                  saveFile.createSync(recursive: true);
+                  saveFile.writeAsBytesSync(
+                    await resp.body().bytes(),
+                    flush: true,
+                  );
+                }
+                image.Image thumbnail =
+                    image.decodeGif(saveFile.readAsBytesSync());
+                Uint8List thumbData = thumbnail.getBytes();
+                if (thumbData.length > 32 * 1024) {
+                  thumbData = Uint8List.fromList(image.encodeJpg(thumbnail,
+                      quality: 100 * 32 * 1024 ~/ thumbData.length));
+                }
+                await _wechat.shareEmoji(
+                  scene: WechatScene.SESSION,
+                  thumbData: thumbData,
+                  emojiUri: Uri.file(saveFile.path),
+                );
               }
-              image.Image thumbnail =
-                  image.decodeGif(timgData.buffer.asUint8List());
-              Uint8List thumbData = thumbnail.getBytes();
-              if (thumbData.length > 32 * 1024) {
-                thumbData = Uint8List.fromList(image.encodeJpg(thumbnail,
-                    quality: 100 * 32 * 1024 ~/ thumbData.length));
-              }
-              await _wechat.shareEmoji(
-                scene: WechatScene.SESSION,
-                thumbData: thumbData,
-                emojiUri: Uri.file(saveFile.path),
-              );
             },
           ),
           ListTile(
@@ -236,6 +258,16 @@ class _HomeState extends State<Home> {
                 nonceStr: '随机字符串, 随机字符串，不长于32位',
                 timeStamp: '时间戳：东八区，单位秒',
                 sign: '签名',
+              );
+            },
+          ),
+          ListTile(
+            title: const Text('拉起小程序'),
+            onTap: () {
+              _wechat.launchMiniProgram(
+                userName: WECHAT_MINIAPPID,
+                path: "page/page/index?uid=123",
+                type: WechatMiniProgram.preview,
               );
             },
           ),
@@ -276,6 +308,8 @@ class _QrauthState extends State<Qrauth> {
   StreamSubscription<String> _authQrcodeScanned;
   StreamSubscription<WechatQrauthResp> _authFinish;
 
+  Uint8List _qrcod;
+
   @override
   void initState() {
     super.initState();
@@ -286,11 +320,18 @@ class _QrauthState extends State<Qrauth> {
     _authFinish = widget.wechat.authFinishResp().listen(_listenAuthFinish);
   }
 
-  void _listenAuthGotQrcode(Uint8List qrcode) {}
+  void _listenAuthGotQrcode(Uint8List qrcode) {
+    _qrcod = qrcode;
+    setState(() {});
+  }
 
-  void _listenAuthQrcodeScanned(String msg) {}
+  void _listenAuthQrcodeScanned(String msg) {
+    print('msg: $msg');
+  }
 
-  void _listenAuthFinish(WechatQrauthResp qrcode) {}
+  void _listenAuthFinish(WechatQrauthResp qrauthResp) {
+    print('resp: ${qrauthResp.errorCode} - ${qrauthResp.authCode}');
+  }
 
   @override
   void dispose() {
@@ -311,10 +352,35 @@ class _QrauthState extends State<Qrauth> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Qrauth'),
+        actions: <Widget>[
+          FlatButton(
+            onPressed: () async {
+              WechatAccessTokenResp accessToken =
+                  await widget.wechat.getAccessToken(
+                appId: WECHAT_APPID,
+                appSecret: WECHAT_APPSECRET,
+              );
+              print(
+                  'accessToken: ${accessToken.errcode} - ${accessToken.errmsg} - ${accessToken.accessToken}');
+              WechatTicketResp ticket = await widget.wechat.getTicket(
+                accessToken: accessToken.accessToken,
+              );
+              print(
+                  'accessToken: ${ticket.errcode} - ${ticket.errmsg} - ${ticket.ticket}');
+              await widget.wechat.startQrauth(
+                appId: WECHAT_APPID,
+                scope: WechatScope.SNSAPI_USERINFO,
+                ticket: ticket.ticket,
+              );
+            },
+            child: const Text('got qr code'),
+          ),
+        ],
       ),
       body: GestureDetector(
         child: Center(
-          child: const Text('got qr code'),
+          child:
+              _qrcod != null ? Image.memory(_qrcod) : const Text('got qr code'),
         ),
       ),
     );
